@@ -91,13 +91,13 @@ func getClothIndexByCity(cityName string) *LifeIndexRsp {
 func getNetworkData(url string) []byte {
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatalln("天气预报接口请求异常, err = ", err)
+		log.Fatalln("服务接口请求异常, err = ", err)
 		return nil
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalln("天气预报接口数据异常, err = ", err)
+		log.Fatalln("服务口数据异常, err = ", err)
 		return nil
 	}
 	return body

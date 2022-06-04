@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/robfig/cron"
 	"github.com/tencent-connect/botgo"
 	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/dto/message"
@@ -18,7 +19,6 @@ import (
 	"github.com/tencent-connect/botgo/openapi"
 	"github.com/tencent-connect/botgo/token"
 	"github.com/tencent-connect/botgo/websocket"
-
 	yaml "gopkg.in/yaml.v2"
 )
 
@@ -26,6 +26,7 @@ import (
 type Config struct {
 	AppID uint64 `yaml:"appid"` //机器人的appid
 	Token string `yaml:"token"` //机器人的token
+	Key string `yaml:"key"` //用于在 oauth 场景进行请求签名的密钥
 }
 
 //WeatherResp 定义了返回天气数据的结构
@@ -91,13 +92,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	//开启每日9点定时
-	timer := cron.New()
-	//cron表达式由6部分组成，从左到右分别表示 秒 分 时 日 月 星期
-	//*表示任意值  ？表示不确定值，只能用于星期和日
-	timer.AddFunc("0 0 9 * * ?", timerHandler)
-	timer.Start()
-
 	var atMessage event.ATMessageEventHandler = atMessageEventHandler //@事件处理
 	var guildEvent event.GuildEventHandler = guildHandler             //频道事件处理
 	intent := websocket.RegisterHandlers(atMessage, guildEvent)           // 注册socket消息处理
@@ -106,36 +100,68 @@ func main() {
 
 //处理 @机器人 的消息
 func atMessageEventHandler(event *dto.WSPayload, data *dto.WSATMessageData) error {
-	res := message.ETLInput(data.Content) //去掉@结构和清除前后空格
+	res := strings.ToLower(message.ETLInput(data.Content)) //去掉@结构和清除前后空格
 	if strings.HasPrefix(res, "/") {      //去掉/
 		res = strings.Replace(res, "/", "", 1)
 	}
+	command := strings.Split(res, " ")
 
-	switch res {
-	case CommandShenZhen, CommandBeiJin, CommandShangHai:
-		var webData *WeatherResp = getWeatherByCity(res)
+	log.Print(command)
+	switch command[0] {
+	case "weather":
+		var webData *WeatherResp = getWeatherByCity(command[1])
 		if webData != nil {
-			//MsgID 表示这条消息的触发来源，如果为空字符串表示主动消息
-			//Ark 传入数据时表示发送的消息是Ark
-			api.PostMessage(ctx, data.ChannelID, &dto.MessageToCreate{MsgID: data.ID, Ark: createArkForTemplate23(webData)})
-		}
-	case CommandDirectChatMsg: //私信深圳的天气消息到用户
-		var webData *WeatherResp = getWeatherByCity(CommandShenZhen)
-		if webData != nil {
-			//创建私信会话
-			directMsg, err := api.CreateDirectMessage(ctx, &dto.DirectMessageToCreate{
-				SourceGuildID: data.GuildID,
-				RecipientID:   data.Author.ID,
-			})
-			if err != nil {
-				log.Println("私信创建出错了，err = ", err)
+			if len(command) == 3 && command[2] == "私信"{
+				//创建私信会话
+				directMsg, err := api.CreateDirectMessage(ctx, &dto.DirectMessageToCreate{
+					SourceGuildID: data.GuildID,
+					RecipientID:   data.Author.ID,
+				})
+				if err != nil {
+					log.Println("私信创建出错了，err = ", err)
+				}
+				//发送私信消息
+				//Embed 传入数据时表示发送的是 Embed
+				api.PostDirectMessage(ctx, directMsg, &dto.MessageToCreate{Embed: createEmbed(webData)})
+			} else {
+				//MsgID 表示这条消息的触发来源，如果为空字符串表示主动消息
+				//Ark 传入数据时表示发送的消息是Ark
+				api.PostMessage(ctx, data.ChannelID, &dto.MessageToCreate{
+					MsgID: data.ID, Ark: createArkForTemplate23(webData)})
 			}
-			//发送私信消息
-			//Embed 传入数据时表示发送的是 Embed
-			api.PostDirectMessage(ctx, directMsg, &dto.MessageToCreate{Embed: createEmbed(webData)})
+
 		}
+	case "roll": //投骰子
+		arg := "d"
+		if len(command) != 1 {
+			arg = command[1]
+		}
+		rolling := roll(data.Author.ID, arg)
+		api.PostMessage(ctx, data.ChannelID, &dto.MessageToCreate{MsgID: data.ID, Content: rolling})
 	}
 	return nil
+}
+
+func roll(sender string, arg string) string {
+	args := strings.Split(arg, "d")
+
+	cnt, err := strconv.Atoi(args[0])
+	if err != nil {
+		cnt = 1
+	}
+	sides, err := strconv.Atoi(args[1])
+	if err != nil {
+		sides = 20
+	}
+
+	results := []string{}
+	finalValue := 0
+	for i := 0; i < cnt; i++ {
+		result := rand.Intn(sides) + 1
+		results = append(results, strconv.Itoa(result))
+		finalValue += result
+	}
+	return "<@" + sender + ">" + strings.Join(results, "+") + "=" + strconv.Itoa(finalValue)
 }
 
 //处理定时事件
